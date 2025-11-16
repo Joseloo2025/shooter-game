@@ -947,7 +947,7 @@ class Juego {
             this.barraArmas.slotActual = slot;
             
             // ACTUALIZAR MUNICIÓN MÁXIMA DEL ARMA ACTUAL
-            this.municion.maxArma = arma.municionEnArma;
+            this.municion.maxArma = arma.municionMaxima || arma.municionEnArma || this.municion.maxArma;
             
             // Efecto visual de cambio de arma
             this.mostrarMensajeFlotante(`🔫 ${arma.nombre} equipada`, "#00ccff");
@@ -968,7 +968,7 @@ class Juego {
         // Actualizar munición máxima cuando el servidor confirma el cambio
         const arma = this.sistemaArmas.obtenerArmaActual();
         if (arma) {
-            this.municion.maxArma = arma.municionEnArma;
+            this.municion.maxArma = arma.municionMaxima || arma.municionEnArma || this.municion.maxArma;
         }
     }
 
@@ -1662,10 +1662,15 @@ class Juego {
                     this.barraArmas.slotActual = jugador.armaActual;
                     this.sistemaArmas.armaActual = jugador.armaActual;
                     
-                    // Actualizar munición máxima según arma actual
-                    const arma = this.sistemaArmas.obtenerArmaActual();
-                    if (arma) {
-                        this.municion.maxArma = arma.municionEnArma;
+                    // Preferir la munición máxima enviada por el servidor (cliente sincroniza con servidor)
+                    if (typeof jugador.maxArma !== 'undefined') {
+                        this.municion.maxArma = jugador.maxArma;
+                    } else {
+                        const arma = this.sistemaArmas.obtenerArmaActual();
+                        if (arma) {
+                            // Fallback: usar la definición local del arma
+                            this.municion.maxArma = arma.municionMaxima || arma.municionEnArma || this.municion.maxArma;
+                        }
                     }
                 }
 

@@ -659,8 +659,26 @@ io.on("connection", (socket) => {
                 `Jugador ${jugador.nombre} cambió al arma en slot ${slot}`,
                 "ARMA"
             );
+            // Actualizar valores de munición según el arma equipada
+            const armaId = jugador.armas && jugador.armas[jugador.armaActual];
+            const armaDef = armaId ? obtenerArmaPorId(armaId) : null;
+            if (armaDef) {
+                jugador.maxArma = Number(armaDef.municionMaxima) || jugador.maxArma || 12;
+                jugador.municionEnArma = typeof jugador.municionEnArma === 'number' ? Math.min(jugador.municionEnArma, jugador.maxArma) : (armaDef.municionEnArma || jugador.maxArma);
+            }
+
+            // Emitir actualización de jugadores en la sala para sincronizar cliente
+            const sala = salas.get(jugador.sala);
+            if (sala) {
+                const jugadoresSala = Array.from(sala.jugadores).map((id) =>
+                    obtenerJugadorPublico(jugadores.get(id))
+                );
+                io.to(jugador.sala).emit("actualizarJugadores", jugadoresSala);
+            }
         }
     });
+
+    
 
     // Evento para crear una nueva sala
     socket.on("crearSala", () => {
