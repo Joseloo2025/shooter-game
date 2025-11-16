@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Shooter Multiplayer - Sistema de Personajes</title>
+    <link rel="stylesheet" href="estilos.css" />
+</head>
+
+<body>
+    <!-- Menú Principal -->
+    <div id="menuPrincipal" class="menu">
+        <h1>SHOOTER MULTIPLAYER</h1>
+        <h3>Sistema de Personajes con Habilidades</h3>
+        <button id="btnCrearSala">Crear Sala</button>
+        <button id="btnUnirseSala">Unirse a Sala</button>
+        <button id="btnAdminPanel" style="background: #ff4444; margin-top: 20px">
+            Panel Admin
+        </button>
+    </div>
+
+    <!-- Menú Crear Sala -->
+    <div id="menuCrearSala" class="menu oculto">
+        <h2>Crear Sala</h2>
+        <div class="codigo-sala" id="codigoSalaCreada">Generando código...</div>
+        <button id="btnComenzarJuego">Comenzar Juego</button>
+        <button id="btnVolverCrear">Volver</button>
+    </div>
+
+    <!-- Menú Unirse a Sala -->
+    <div id="menuUnirseSala" class="menu oculto">
+        <h2>Unirse a Sala</h2>
+        <input type="text" id="inputCodigoSala" placeholder="Código de sala" maxlength="6" />
+        <button id="btnUnirse">Unirse</button>
+        <button id="btnVolverUnirse">Volver</button>
+    </div>
+
+    <!-- Juego -->
+    <div id="juego" class="oculto">
+        <canvas id="canvasJuego" width="800" height="600"></canvas>
+        <canvas id="canvasNiebla" width="800" height="600"></canvas>
+        <div id="infoJugadores"></div>
+        <div id="infoMunicion" class="info-municion"></div>
+        <div id="infoHabilidad" class="info-habilidad"></div>
+    </div>
+
+    <!-- Menú de Selección de Personajes -->
+    <div id="menuPersonajes" class="menu-personajes oculto">
+        <h2>Seleccionar Personaje</h2>
+        <div class="grid-personajes">
+            <div class="personaje-opcion" data-personaje="1">
+                <h3>🔫 Soldado</h3>
+                <div class="imagen-personaje">
+                    <img src="IMG/jugador1.png" alt="Soldado" onerror="this.style.display='none'" />
+                </div>
+                <div class="estadisticas-personaje">
+                    <div class="stat">❤️ Vida: +20%</div>
+                    <div class="stat">🛡️ Escudo: Normal</div>
+                    <div class="stat">⚡ Velocidad: Normal</div>
+                    <div class="stat">💥 Daño: Normal</div>
+                </div>
+                <div class="habilidad-info">
+                    <strong>Habilidad: Resistencia Mejorada</strong>
+                    <p>Reduce daño 15% y regenera escudo más rápido por 5s</p>
+                    <div class="cooldown">⏱️ 30s cooldown</div>
+                </div>
+                <button class="btn-seleccionar">Seleccionar</button>
+            </div>
+            <div class="personaje-opcion" data-personaje="2">
+                <h3>🎯 Francotirador</h3>
+                <div class="imagen-personaje">
+                    <img src="IMG/jugador2.png" alt="Francotirador" onerror="this.style.display='none'" />
+                </div>
+                <div class="estadisticas-personaje">
+                    <div class="stat">❤️ Vida: -15%</div>
+                    <div class="stat">🛡️ Escudo: -10%</div>
+                    <div class="stat">⚡ Velocidad: -10%</div>
+                    <div class="stat">💥 Daño: +40% (Francotiradores)</div>
+                </div>
+                <div class="habilidad-info">
+                    <strong>Habilidad: Disparo Preciso</strong>
+                    <p>Próximo disparo hace 200% de daño y revela enemigos</p>
+                    <div class="cooldown">⏱️ 35s cooldown</div>
+                </div>
+                <button class="btn-seleccionar">Seleccionar</button>
+            </div>
+            <div class="personaje-opcion" data-personaje="3">
+                <h3>⚡ Asalto</h3>
+                <div class="imagen-personaje">
+                    <img src="IMG/jugador3.png" alt="Asalto" onerror="this.style.display='none'" />
+                </div>
+                <div class="estadisticas-personaje">
+                    <div class="stat">❤️ Vida: Normal</div>
+                    <div class="stat">🛡️ Escudo: Normal</div>
+                    <div class="stat">⚡ Velocidad: +15%</div>
+                    <div class="stat">🔁 Recarga: +30% más rápido</div>
+                </div>
+                <div class="habilidad-info">
+                    <strong>Habilidad: Carga Rápida</strong>
+                    <p>Velocidad +30% y no consume munición por 4s</p>
+                    <div class="cooldown">⏱️ 30s cooldown</div>
+                </div>
+                <button class="btn-seleccionar">Seleccionar</button>
+            </div>
+            <div class="personaje-opcion" data-personaje="4">
+                <h3>🏥 Médico</h3>
+                <div class="imagen-personaje">
+                    <img src="IMG/jugador4.png" alt="Médico" onerror="this.style.display='none'" />
+                </div>
+                <div class="estadisticas-personaje">
+                    <div class="stat">❤️ Vida: Normal</div>
+                    <div class="stat">🛡️ Escudo: +25%</div>
+                    <div class="stat">⚡ Velocidad: Normal</div>
+                    <div class="stat">💥 Daño: -10%</div>
+                </div>
+                <div class="habilidad-info">
+                    <strong>Habilidad: Campo de Curación</strong>
+                    <p>Cura 25% de vida a sí mismo y aliados cercanos</p>
+                    <div class="cooldown">⏱️ 40s cooldown</div>
+                </div>
+                <button class="btn-seleccionar">Seleccionar</button>
+            </div>
+            <div class="personaje-opcion" data-personaje="5">
+                <h3>🔧 Ingeniero</h3>
+                <div class="imagen-personaje">
+                    <img src="IMG/jugador5.png" alt="Ingeniero" onerror="this.style.display='none'" />
+                </div>
+                <div class="estadisticas-personaje">
+                    <div class="stat">❤️ Vida: Normal</div>
+                    <div class="stat">🛡️ Escudo: +20%</div>
+                    <div class="stat">⚡ Velocidad: -10%</div>
+                    <div class="stat">📦 Munición: +25%</div>
+                </div>
+                    <div class="habilidad-info">
+                        <strong>Habilidad: Trampa de Rastreo</strong>
+                        <p>Coloca una trampa que revela enemigos en el mini-mapa por 10s</p>
+                        <div class="cooldown">⏱️ 30s cooldown</div>
+                    </div>
+                <button class="btn-seleccionar">Seleccionar</button>
+            </div>
+            <div class="personaje-opcion" data-personaje="6">
+                <h3>👑 Comandante</h3>
+                <div class="imagen-personaje">
+                    <img src="IMG/jugador6.png" alt="Comandante" onerror="this.style.display='none'" />
+                </div>
+                <div class="estadisticas-personaje">
+                    <div class="stat">❤️ Vida: +15%</div>
+                    <div class="stat">🛡️ Escudo: Normal</div>
+                    <div class="stat">⚡ Velocidad: Normal</div>
+                    <div class="stat">💥 Daño: +10%</div>
+                </div>
+                <div class="habilidad-info">
+                    <strong>Habilidad: Ataque Coordinado</strong>
+                    <p>Aumenta daño del equipo 20% por 6s</p>
+                    <div class="cooldown">⏱️ 40s cooldown</div>
+                </div>
+                <button class="btn-seleccionar">Seleccionar</button>
+            </div>
+        </div>
+        <button id="btnCerrarPersonajes">Cerrar</button>
+    </div>
+
+    <!-- Panel de Administrador -->
+    <div id="panelAdmin" class="menu-personajes oculto">
+        <h2>Panel de Administrador</h2>
+        <div class="admin-controls">
+            <h3>Control de Tiempo</h3>
+            <button id="btnAdminAcelerarTiempo">Acelerar Tiempo (-1 min)</button>
+            <button id="btnAdminPausarTiempo">Pausar/Reanudar</button>
+            <button id="btnAdminSaltarMapa">Saltar al Siguiente Mapa</button>
+            <button id="btnAdminTerminarPartida">Terminar Partida</button>
+
+            <h3>Control de Sala</h3>
+            <input type="text" id="inputAdminCodigoSala" placeholder="Código de sala" />
+            <button id="btnAdminForzarInicio">Forzar Inicio</button>
+            <button id="btnAdminExpulsarTodos">Expulsar Todos</button>
+
+            <h3>Estadísticas</h3>
+            <div id="adminStats" style="color: #00ff88; text-align: left; margin: 10px 0"></div>
+        </div>
+        <button id="btnCerrarAdmin">Cerrar Panel</button>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="anticheat-cliente.js"></script>
+    <script src="mapa.js"></script>
+    <script src="armas.js"></script>
+    <script src="juego.js"></script>
+</body>
+
+</html>

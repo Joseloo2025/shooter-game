@@ -329,12 +329,3 @@ class Mapa {
         return false;
     }
 }
-
-// Exportar para Node.js y para uso en navegador
-if (typeof module !== 'undefined' && typeof module.exports !== 'undefined') {
-    module.exports = Mapa;
-}
-
-if (typeof window !== 'undefined') {
-    window.Mapa = Mapa;
-}
