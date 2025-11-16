@@ -263,37 +263,7 @@ function procesarHabilidadesActivas(sala, jugadores, aplicarDano, SISTEMA_PERSON
         }
     });
 
-    // Procesar torretas
-    if (sala.torretas) {
-        for (let i = sala.torretas.length - 1; i >= 0; i--) {
-            const torreta = sala.torretas[i];
-            
-            // Verificar si la torreta ha expirado
-            if (ahora - torreta.inicio > torreta.duracion) {
-                sala.torretas.splice(i, 1);
-                necesitaActualizacion = true;
-                continue;
-            }
-            
-            // Buscar enemigos cercanos para disparar
-            let objetivoEncontrado = false;
-            sala.jugadores.forEach((jugadorId) => {
-                if (!objetivoEncontrado && jugadorId !== torreta.jugadorId) {
-                    const enemigo = jugadores.get(jugadorId);
-                    if (enemigo) {
-                        const distancia = Math.sqrt(
-                            Math.pow(torreta.x - enemigo.x, 2) + Math.pow(torreta.y - enemigo.y, 2)
-                        );
-                        if (distancia <= torreta.radio) {
-                            // Disparar a enemigo
-                            aplicarDano(enemigo.id, torreta.daño, torreta.jugadorId);
-                            objetivoEncontrado = true;
-                        }
-                    }
-                }
-            });
-        }
-    }
+    // (No hay lógica de torretas — el Ingeniero usa trampas)
 
     return necesitaActualizacion;
 }

@@ -3,6 +3,7 @@ const http = require("http");
 const socketIo = require("socket.io");
 const path = require("path");
 const fs = require("fs");
+const { saveCheatReport } = require('./server/anticheat');
 const salasModule = require('./server/salas');
 
 // Usar la definición de Mapa centralizada en `mapa.js`
@@ -38,6 +39,33 @@ const { SISTEMA_PERSONAJES, activarHabilidadJugador, procesarHabilidadesActivas 
 const salas = new Map();
 const jugadores = new Map();
 
+// Helper: crear una vista pública (ligera) de un jugador para emitir al cliente
+function obtenerJugadorPublico(jugador) {
+    if (!jugador) return null;
+    return {
+        id: jugador.id,
+        sala: jugador.sala,
+        x: jugador.x,
+        y: jugador.y,
+        angulo: jugador.angulo,
+        vida: jugador.vida,
+        escudo: jugador.escudo,
+        maxVida: jugador.maxVida,
+        maxEscudo: jugador.maxEscudo,
+        municion: jugador.municion,
+        municionEnArma: jugador.municionEnArma,
+        maxArma: jugador.maxArma,
+        oro: jugador.oro,
+        armas: jugador.armas,
+        armaActual: jugador.armaActual,
+        nombre: jugador.nombre,
+        personaje: jugador.personaje,
+        esCreador: jugador.esCreador,
+        kills: jugador.kills,
+        muertes: jugador.muertes,
+    };
+}
+
 // Estadísticas globales
 const estadisticasGlobales = {
     totalJugadoresConectados: 0,
@@ -48,26 +76,26 @@ const estadisticasGlobales = {
     inicioServidor: new Date(),
 };
 
-// Configuración de balance del juego
+// Configuración global del juego (ajustable vía variables de entorno si se desea)
 const CONFIG_JUEGO = {
-    DANO_BALA: 15,
-    VELOCIDAD_BALA: 12,
-    VIDA_MAXIMA: 100,
-    ESCUDO_MAXIMO: 50,
-    REGENERACION_ESCUDO: 3,
-    TIEMPO_REGENERACION: 4000,
-    VELOCIDAD_JUGADOR: 5,
-    MAX_JUGADORES_POR_SALA: 8,
-    TIEMPO_REAPARICION_CAJAS: 10000,
-    MUNICION_INICIAL: 50,
-    MUNICION_POR_CAJA: 30,
-    MAX_MUNICION: 100,
-    TIEMPO_PARTIDA: 300000,
-    TIEMPO_TRANSICION: 5000,
+    DANO_BALA: Number(process.env.DANO_BALA) || 25,
+    // Velocidad en unidades por frame usada por el cliente. Valor por defecto compatible con cliente: 12
+    VELOCIDAD_BALA: Number(process.env.VELOCIDAD_BALA) || 12,
+    TIEMPO_PARTIDA: Number(process.env.TIEMPO_PARTIDA) || 5 * 60 * 1000, // 5 minutos por defecto
+    MAX_JUGADORES_POR_SALA: Number(process.env.MAX_JUGADORES_POR_SALA) || 12,
+    REGENERACION_ESCUDO: Number(process.env.REGENERACION_ESCUDO) || 1, // puntos por segundo
+    TIEMPO_REGENERACION: Number(process.env.TIEMPO_REGENERACION) || 5000, // ms sin recibir daño para empezar regeneracion
+    TIEMPO_TRANSICION: Number(process.env.TIEMPO_TRANSICION) || 10000, // ms entre mapas
+    TIEMPO_REAPARICION_CAJAS: Number(process.env.TIEMPO_REAPARICION_CAJAS) || 15000, // ms para reaparición de cajas
+    MUNICION_INICIAL: Number(process.env.MUNICION_INICIAL) || 50,
+    MUNICION_POR_CAJA: Number(process.env.MUNICION_POR_CAJA) || 20,
+    MAX_MUNICION: Number(process.env.MAX_MUNICION) || 200,
+    VIDA_MAXIMA: Number(process.env.VIDA_MAXIMA) || 100,
+    ESCUDO_MAXIMO: Number(process.env.ESCUDO_MAXIMO) || 50,
 };
 
-// Contraseña de administrador
-const ADMIN_PASSWORD = "admin123";
+// Contraseña administrativa (se puede leer desde env var para producción)
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin123';
 
 // Función para obtener la ruta del archivo de log con fecha
 function obtenerRutaLog() {
@@ -147,16 +175,24 @@ function verificarMunicion(jugadorId) {
     const jugador = jugadores.get(jugadorId);
     if (!jugador) return false;
 
-    return jugador.municion > 0;
+    const mun = Number(jugador.municion) || 0;
+    // Normalizar en el objeto por si tenía NaN
+    jugador.municion = mun;
+    return mun > 0;
 }
 
 // Consumir munición
 function consumirMunicion(jugadorId, cantidad = 1) {
     const jugador = jugadores.get(jugadorId);
-    if (jugador && jugador.municion >= cantidad) {
-        jugador.municion -= cantidad;
+    if (!jugador) return false;
+
+    const enArma = Number(jugador.municionEnArma) || 0;
+    const cantidadNum = Number(cantidad) || 0;
+    if (enArma >= cantidadNum && cantidadNum > 0) {
+        jugador.municionEnArma = enArma - cantidadNum;
         return true;
     }
+    // Si no hay munición en el cargador, no permitir disparar
     return false;
 }
 
@@ -165,9 +201,11 @@ function recargarMunicion(jugadorId, cantidad) {
     const jugador = jugadores.get(jugadorId);
     if (jugador) {
         const maxMunicion = CONFIG_JUEGO.MAX_MUNICION * (SISTEMA_PERSONAJES[jugador.personaje].estadisticas.capacidadMunicion || 1);
-        const espacioDisponible = maxMunicion - jugador.municion;
-        const municionAAgregar = Math.min(cantidad, espacioDisponible);
-        jugador.municion += municionAAgregar;
+        const munActual = Number(jugador.municion) || 0;
+        const cantidadNum = Number(cantidad) || 0;
+        const espacioDisponible = Math.max(0, maxMunicion - munActual);
+        const municionAAgregar = Math.max(0, Math.min(cantidadNum, espacioDisponible));
+        jugador.municion = munActual + municionAAgregar;
         return municionAAgregar;
     }
     return 0;
@@ -192,55 +230,7 @@ function obtenerEstadisticasServidor() {
 
 // La administración del tiempo se delega al módulo `server/salas`.
 
-// Función para guardar reportes en el servidor
-function saveCheatReport(reportData) {
-    try {
-        const reportsDir = path.join(__dirname, 'reports');
-
-        // Crear directorio de reportes si no existe
-        if (!fs.existsSync(reportsDir)) {
-            fs.mkdirSync(reportsDir, { recursive: true });
-        }
-
-        const reportFile = path.join(reportsDir, 'cheat_reports.json');
-        let existingReports = [];
-
-        // Leer reportes existentes
-        if (fs.existsSync(reportFile)) {
-            const fileContent = fs.readFileSync(reportFile, 'utf8');
-            existingReports = JSON.parse(fileContent);
-        }
-
-        // Agregar nuevo reporte
-        existingReports.push({
-            ...reportData,
-            serverTimestamp: new Date().toISOString(),
-            ip: reportData.ip || 'No disponible'
-        });
-
-        // Guardar archivo
-        fs.writeFileSync(reportFile, JSON.stringify(existingReports, null, 2));
-
-        console.log(`[ANTICHEAT] Reporte guardado: ${reportData.userId} - ${reportData.cheatType}`);
-
-        // También guardar en archivo individual por fecha
-        const date = new Date();
-        const dateStr = date.toISOString().split('T')[0];
-        const individualFile = path.join(reportsDir, `reports_${dateStr}.json`);
-
-        let dailyReports = [];
-        if (fs.existsSync(individualFile)) {
-            const dailyContent = fs.readFileSync(individualFile, 'utf8');
-            dailyReports = JSON.parse(dailyContent);
-        }
-
-        dailyReports.push(reportData);
-        fs.writeFileSync(individualFile, JSON.stringify(dailyReports, null, 2));
-
-    } catch (error) {
-        console.error('[ANTICHEAT] Error guardando reporte:', error);
-    }
-}
+// La función `saveCheatReport` ahora está en `server/anticheat.js` y se importa arriba.
 
 // Las funciones del sistema de armas (`comprarArmaJugador`, `cambiarArmaJugador`,
 // etc.) se importan desde `server/armas.js` (ver la destructuración al inicio del archivo).
@@ -471,7 +461,7 @@ io.on("connection", (socket) => {
             const sala = salas.get(jugador.sala);
             if (sala) {
                 const jugadoresSala = Array.from(sala.jugadores).map((id) =>
-                    jugadores.get(id)
+                    obtenerJugadorPublico(jugadores.get(id))
                 );
                 io.to(jugador.sala).emit("actualizarJugadores", jugadoresSala);
             }
@@ -502,7 +492,7 @@ io.on("connection", (socket) => {
             const sala = salas.get(jugador.sala);
             if (sala) {
                 const jugadoresSala = Array.from(sala.jugadores).map((id) =>
-                    jugadores.get(id)
+                    obtenerJugadorPublico(jugadores.get(id))
                 );
                 io.to(jugador.sala).emit("actualizarJugadores", jugadoresSala);
             }
@@ -524,7 +514,7 @@ io.on("connection", (socket) => {
             const sala = salas.get(jugador.sala);
             if (sala) {
                 const jugadoresSala = Array.from(sala.jugadores).map((id) =>
-                    jugadores.get(id)
+                    obtenerJugadorPublico(jugadores.get(id))
                 );
                 io.to(jugador.sala).emit("actualizarJugadores", jugadoresSala);
                 
@@ -574,8 +564,25 @@ io.on("connection", (socket) => {
             return;
         }
     
-        // Crear nueva trampa
+        // Crear nueva trampa (limitar máximo 3 trampas por jugador)
         sala.trampas = sala.trampas || [];
+
+        // Contar trampas existentes del mismo jugador
+        const trampasJugador = sala.trampas.filter(t => t.jugadorId === socket.id);
+        if (trampasJugador.length >= 3) {
+            // Encontrar la trampa más antigua del jugador y eliminarla
+            trampasJugador.sort((a, b) => a.inicio - b.inicio);
+            const trampaAntiguaId = trampasJugador[0].id;
+            const idxAntigua = sala.trampas.findIndex(t => t.id === trampaAntiguaId);
+            if (idxAntigua !== -1) {
+                sala.trampas.splice(idxAntigua, 1);
+                logEvento(
+                    `Jugador ${jugador.nombre} excedió límite de trampas; se eliminó la trampa ${trampaAntiguaId}`,
+                    "HABILIDAD"
+                );
+            }
+        }
+
         const nuevaTrampa = {
             id: Math.random().toString(36).substr(2, 9),
             x: data.x,
@@ -603,7 +610,7 @@ io.on("connection", (socket) => {
     
         // Actualizar jugadores
         const jugadoresSala = Array.from(sala.jugadores).map((id) =>
-            jugadores.get(id)
+            obtenerJugadorPublico(jugadores.get(id))
         );
         io.to(sala.codigo).emit("actualizarJugadores", jugadoresSala);
     
@@ -618,6 +625,8 @@ io.on("connection", (socket) => {
         );
     });	
 
+    // (Torreta removida) El Ingeniero usa trampas; no hay handler de colocarTorreta
+
     // EVENTOS DEL SISTEMA DE ARMAS Y TIENDA
     socket.on("comprarArma", (data) => {
         const resultado = comprarArmaJugador(jugadores, socket.id, data.armaId);
@@ -629,7 +638,7 @@ io.on("connection", (socket) => {
             const sala = salas.get(jugador.sala);
             if (sala) {
                 const jugadoresSala = Array.from(sala.jugadores).map((id) =>
-                    jugadores.get(id)
+                    obtenerJugadorPublico(jugadores.get(id))
                 );
                 io.to(jugador.sala).emit("actualizarJugadores", jugadoresSala);
             }
@@ -675,7 +684,6 @@ io.on("connection", (socket) => {
             mapaActual: 1,
             tiempoRestante: CONFIG_JUEGO.TIEMPO_PARTIDA,
             cajasMunicion: [],
-            torretas: [],
             timestampCreacion: Date.now(),
             intervalos: {},
         });
@@ -720,6 +728,16 @@ io.on("connection", (socket) => {
                 6: null
             },
             armaActual: 1,
+            // Munición por arma
+            municionEnArma: (SISTEMA_ARMAS.ARMAS_DISPONIBLES[1] && SISTEMA_ARMAS.ARMAS_DISPONIBLES[1].municionEnArma) || 12,
+            maxArma: (SISTEMA_ARMAS.ARMAS_DISPONIBLES[1] && SISTEMA_ARMAS.ARMAS_DISPONIBLES[1].municionMaxima) || 12,
+            // Control de velocidad de disparo por jugador (timestamp ms)
+            ultimoDisparo: 0,
+            // Munición por arma
+            municionEnArma: (SISTEMA_ARMAS.ARMAS_DISPONIBLES[1] && SISTEMA_ARMAS.ARMAS_DISPONIBLES[1].municionEnArma) || 12,
+            maxArma: (SISTEMA_ARMAS.ARMAS_DISPONIBLES[1] && SISTEMA_ARMAS.ARMAS_DISPONIBLES[1].municionMaxima) || 12,
+            // Control de velocidad de disparo por jugador (timestamp ms)
+            ultimoDisparo: 0,
             // SISTEMA DE HABILIDADES
             habilidadActiva: null,
             habilidadCooldown: null,
@@ -838,10 +856,10 @@ io.on("connection", (socket) => {
 
         socket.emit("unidoSala", codigoSala);
 
-        const jugadoresSala = Array.from(sala.jugadores).map((id) =>
-            jugadores.get(id)
-        );
-        io.to(codigoSala).emit("actualizarJugadores", jugadoresSala);
+                        const jugadoresSala = Array.from(sala.jugadores).map((id) =>
+                            obtenerJugadorPublico(jugadores.get(id))
+                        );
+                        io.to(codigoSala).emit("actualizarJugadores", jugadoresSala);
 
         // Enviar información del tiempo actual si la partida está en curso
         if (sala.enJuego) {
@@ -1022,7 +1040,7 @@ io.on("connection", (socket) => {
                 jugador.ultimaActualizacion = Date.now();
 
                 const jugadoresSala = Array.from(sala.jugadores).map((id) =>
-                    jugadores.get(id)
+                    obtenerJugadorPublico(jugadores.get(id))
                 );
                 io.to(jugador.sala).emit("actualizarJugadores", jugadoresSala);
             }
@@ -1037,31 +1055,77 @@ io.on("connection", (socket) => {
             return;
         }
 
-        if (datosDisparo && typeof datosDisparo.angulo === "number") {
-            if (!consumirMunicion(socket.id, 1)) {
-                return;
+            if (datosDisparo && typeof datosDisparo.angulo === "number") {
+                // Determinar arma equipada y su definición
+                let armaIdEquipada = null;
+                const armaDef = (jugador && jugador.armas && typeof jugador.armaActual !== 'undefined')
+                    ? SISTEMA_ARMAS.ARMAS_DISPONIBLES[jugador.armas[jugador.armaActual]]
+                    : null;
+
+                // Verificar cadencia de disparo por arma
+                const ahora = Date.now();
+                const ultima = Number(jugador.ultimoDisparo) || 0;
+                const cadencia = armaDef && armaDef.velocidadDisparo ? Number(armaDef.velocidadDisparo) : 0;
+                if (cadencia > 0 && ahora - ultima < cadencia) {
+                    // No puede disparar aún
+                    return;
+                }
+
+                // Intentar consumir munición del cargador
+                if (!consumirMunicion(socket.id, 1)) {
+                    return;
+                }
+
+                jugador.ultimoDisparo = ahora;
+
+                // Construir y emitir disparos (soporte para escopeta: múltiples proyectiles)
+                const velocidadPorDefecto = CONFIG_JUEGO.VELOCIDAD_BALA;
+                const velocidadBala = armaDef && armaDef.velocidadBala ? armaDef.velocidadBala : velocidadPorDefecto;
+                armaIdEquipada = armaDef ? armaDef.id : null;
+
+                // Log temporal para debugging
+                logEvento(`DISPARO recibido: ${socket.id} arma:${armaIdEquipada} angulo:${datosDisparo.angulo.toFixed(2)}`, "DISPARO");
+
+                if (armaDef && armaDef.tipo === 'escopeta' && armaDef.proyectiles && armaDef.proyectiles > 1) {
+                    const n = armaDef.proyectiles;
+                    const spread = (1 - (armaDef.precision || 0.75)) * 0.6; // radianes aproximados
+                    for (let i = 0; i < n; i++) {
+                        // Distribuir en abanico
+                        const offset = ((i / (n - 1)) - 0.5) * spread + (Math.random() - 0.5) * (spread * 0.2);
+                        const disparoValido = {
+                            x: jugador.x,
+                            y: jugador.y,
+                            angulo: datosDisparo.angulo + offset,
+                            velocidad: velocidadBala,
+                            jugadorId: socket.id,
+                            armaId: armaIdEquipada,
+                            id: Math.random().toString(36).substr(2, 9),
+                            timestamp: Date.now(),
+                        };
+                        io.to(jugador.sala).emit("nuevoDisparo", disparoValido);
+                    }
+                } else {
+                    const disparoValido = {
+                        x: jugador.x,
+                        y: jugador.y,
+                        angulo: datosDisparo.angulo,
+                        velocidad: velocidadBala,
+                        jugadorId: socket.id,
+                        armaId: armaIdEquipada,
+                        id: Math.random().toString(36).substr(2, 9),
+                        timestamp: Date.now(),
+                    };
+                    io.to(jugador.sala).emit("nuevoDisparo", disparoValido);
+                }
+
+                const sala = salas.get(jugador.sala);
+                if (sala) {
+                    const jugadoresSala = Array.from(sala.jugadores).map((id) =>
+                        obtenerJugadorPublico(jugadores.get(id))
+                    );
+                    io.to(jugador.sala).emit("actualizarJugadores", jugadoresSala);
+                }
             }
-
-            const disparoValido = {
-                x: jugador.x,
-                y: jugador.y,
-                angulo: datosDisparo.angulo,
-                velocidad: CONFIG_JUEGO.VELOCIDAD_BALA,
-                jugadorId: socket.id,
-                id: Math.random().toString(36).substr(2, 9),
-                timestamp: Date.now(),
-            };
-
-            io.to(jugador.sala).emit("nuevoDisparo", disparoValido);
-
-            const sala = salas.get(jugador.sala);
-            if (sala) {
-                const jugadoresSala = Array.from(sala.jugadores).map((id) =>
-                    jugadores.get(id)
-                );
-                io.to(jugador.sala).emit("actualizarJugadores", jugadoresSala);
-            }
-        }
     });
 
     // EVENTO MEJORADO: Recoger munición con límites
@@ -1101,8 +1165,42 @@ io.on("connection", (socket) => {
         }
     });
 
+    // EVENTO: Recargar (cliente solicita recarga completa)
+    socket.on("recargar", () => {
+        const jugador = jugadores.get(socket.id);
+        if (!jugador) return;
+
+        const maxEnArma = Number(jugador.maxArma) || 0;
+        const enArma = Number(jugador.municionEnArma) || 0;
+        const reserva = Number(jugador.municion) || 0;
+
+        const balasNecesarias = Math.max(0, maxEnArma - enArma);
+        const balasARecargar = Math.min(balasNecesarias, reserva);
+
+        jugador.municionEnArma = enArma + balasARecargar;
+        jugador.municion = reserva - balasARecargar;
+
+        // Notificar al jugador y a la sala
+        socket.emit("recargaCompletada", {
+            jugadorId: socket.id,
+            municionEnArma: jugador.municionEnArma,
+            municion: jugador.municion,
+        });
+
+        const sala = salas.get(jugador.sala);
+        if (sala) {
+            const jugadoresSala = Array.from(sala.jugadores).map((id) =>
+                obtenerJugadorPublico(jugadores.get(id))
+            );
+            io.to(jugador.sala).emit("actualizarJugadores", jugadoresSala);
+        }
+
+        logEvento(`Recarga: ${jugador.nombre} recargó ${balasARecargar} balas (enArma:${jugador.municionEnArma} reserva:${jugador.municion})`, "GAME");
+    });
+
     // EVENTO CORREGIDO: Jugador golpeado con daño real del arma y habilidades
     socket.on("jugadorGolpeado", (data) => {
+        logEvento(`EVENT jugadorGolpeado recibido: target=${data.jugadorId} attacker=${data.disparadorId}`,'DEBUG');
         const jugadorGolpeado = jugadores.get(data.jugadorId);
         const jugadorDisparador = jugadores.get(data.disparadorId);
 
@@ -1167,6 +1265,11 @@ io.on("connection", (socket) => {
                 jugadorGolpeado.maxVida = CONFIG_JUEGO.VIDA_MAXIMA * personaje.estadisticas.vidaMultiplicador;
                 jugadorGolpeado.maxEscudo = CONFIG_JUEGO.ESCUDO_MAXIMO * personaje.estadisticas.escudoMultiplicador;
                 jugadorGolpeado.municion = CONFIG_JUEGO.MUNICION_INICIAL * (personaje.estadisticas.capacidadMunicion || 1);
+                // Ajustar munición en arma según arma equipada
+                const armaEquipadaId = jugadorGolpeado.armas && jugadorGolpeado.armas[jugadorGolpeado.armaActual];
+                const armaEquipadaDef = armaEquipadaId ? SISTEMA_ARMAS.ARMAS_DISPONIBLES[armaEquipadaId] : null;
+                jugadorGolpeado.municionEnArma = armaEquipadaDef ? armaEquipadaDef.municionEnArma : (jugadorGolpeado.municionEnArma || 12);
+                jugadorGolpeado.maxArma = armaEquipadaDef ? armaEquipadaDef.municionMaxima : (jugadorGolpeado.maxArma || 12);
                 jugadorGolpeado.ultimoDano = Date.now();
                 jugadorGolpeado.regenerandoEscudo = false;
                 jugadorGolpeado.habilidadActiva = null;
@@ -1187,7 +1290,7 @@ io.on("connection", (socket) => {
                 });
 
                 const jugadoresSala = Array.from(sala.jugadores).map((id) =>
-                    jugadores.get(id)
+                    obtenerJugadorPublico(jugadores.get(id))
                 );
                 io.to(jugadorGolpeado.sala).emit("actualizarJugadores", jugadoresSala);
             } else {
@@ -1197,7 +1300,7 @@ io.on("connection", (socket) => {
 
                 const sala = salas.get(jugadorGolpeado.sala);
                 const jugadoresSala = Array.from(sala.jugadores).map((id) =>
-                    jugadores.get(id)
+                    obtenerJugadorPublico(jugadores.get(id))
                 );
                 io.to(jugadorGolpeado.sala).emit("actualizarJugadores", jugadoresSala);
             }
