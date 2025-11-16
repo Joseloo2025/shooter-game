@@ -3,6 +3,7 @@ const http = require("http");
 const socketIo = require("socket.io");
 const path = require("path");
 const fs = require("fs");
+const salasModule = require('./server/salas');
 
 // Usar la definición de Mapa centralizada en `mapa.js`
 const Mapa = require('./mapa');
@@ -120,289 +121,22 @@ function mostrarEstadisticasServidor() {
     logEvento(`Salas activas: ${salas.size}`, "STATS");
     logEvento("=================================", "STATS");
 }
+// Inicializar módulo de salas con el contexto (salas, jugadores, io, Mapa, etc.)
+salasModule.setContext({ salas, jugadores, io, Mapa, SISTEMA_PERSONAJES, CONFIG_JUEGO, logEvento, estadisticasGlobales });
 
-// Generar código de sala único
-function generarCodigoSala() {
-    const caracteres = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-    let codigo = "";
-    for (let i = 0; i < 6; i++) {
-        codigo += caracteres.charAt(Math.floor(Math.random() * caracteres.length));
-    }
-
-    if (salas.has(codigo)) {
-        return generarCodigoSala();
-    }
-    return codigo;
-}
-
-// Función para generar posición segura (sin colisiones)
-function generarPosicionSegura(mapa) {
-    let x, y;
-    let intentos = 0;
-    const maxIntentos = 100;
-
-    do {
-        x = Math.random() * 700 + 50;
-        y = Math.random() * 500 + 50;
-        intentos++;
-    } while (mapa.colisiona(x, y, 20) && intentos < maxIntentos);
-
-    if (intentos >= maxIntentos) {
-        return { x: 400, y: 300 };
-    }
-
-    return { x, y };
-}
-
-// Función para generar cajas de munición
-function generarCajasMunicion(sala) {
-    sala.cajasMunicion = [];
-    const numCajas = Math.min(3, Math.floor(sala.jugadores.size / 2) + 1);
-
-    for (let i = 0; i < numCajas; i++) {
-        const posicion = generarPosicionSegura(sala.mapa);
-        sala.cajasMunicion.push({
-            id: Math.random().toString(36).substr(2, 9),
-            x: posicion.x,
-            y: posicion.y,
-            tipo: "municion",
-            timestamp: Date.now(),
-        });
-    }
-}
-
-// Función para regenerar escudos
-function regenerarEscudos(sala) {
-    const ahora = Date.now();
-    let necesitaActualizacion = false;
-
-    sala.jugadores.forEach((jugadorId) => {
-        const jugador = jugadores.get(jugadorId);
-        if (
-            jugador &&
-            ahora - jugador.ultimoDano > CONFIG_JUEGO.TIEMPO_REGENERACION
-        ) {
-            if (jugador.escudo < jugador.maxEscudo) {
-                // Aplicar multiplicador de regeneración según personaje
-                const personaje = SISTEMA_PERSONAJES[jugador.personaje];
-                const multiplicadorRegeneracion = personaje.estadisticas.regeneracionEscudo || 1;
-                
-                jugador.escudo = Math.min(
-                    jugador.escudo + (CONFIG_JUEGO.REGENERACION_ESCUDO * multiplicadorRegeneracion),
-                    jugador.maxEscudo
-                );
-                jugador.regenerandoEscudo = true;
-                necesitaActualizacion = true;
-            }
-        } else if (
-            jugador &&
-            jugador.regenerandoEscudo &&
-            ahora - jugador.ultimoDano <= CONFIG_JUEGO.TIEMPO_REGENERACION
-        ) {
-            jugador.regenerandoEscudo = false;
-            necesitaActualizacion = true;
-        }
-    });
-
-    if (necesitaActualizacion) {
-        const jugadoresSala = Array.from(sala.jugadores).map((id) =>
-            jugadores.get(id)
-        );
-        io.to(sala.codigo).emit("actualizarJugadores", jugadoresSala);
-    }
-}
-
-// Función para verificar y limpiar salas vacías
-function limpiarSalasVacias() {
-    for (const [codigo, sala] of salas.entries()) {
-        if (sala.jugadores.size === 0) {
-            if (sala.intervalos) {
-                clearInterval(sala.intervalos.escudo);
-                clearInterval(sala.intervalos.cajas);
-                clearInterval(sala.intervalos.tiempo);
-            }
-            salas.delete(codigo);
-            logEvento(`Sala ${codigo} eliminada por estar vacía`, "CLEANUP");
-        }
-    }
-}
-
-// Función para determinar ganador de la partida
-function determinarGanador(sala) {
-    let maxKills = -1;
-    let ganadores = [];
-
-    sala.jugadores.forEach((jugadorId) => {
-        const jugador = jugadores.get(jugadorId);
-        if (jugador) {
-            if (jugador.kills > maxKills) {
-                maxKills = jugador.kills;
-                ganadores = [jugador];
-            } else if (jugador.kills === maxKills) {
-                ganadores.push(jugador);
-            }
-        }
-    });
-
-    return ganadores;
-}
-
-// Función para cambiar al siguiente mapa
-function cambiarMapa(sala) {
-    sala.mapaActual++;
-
-    if (sala.mapaActual > 3) {
-        // Fin del ciclo de mapas
-        const jugadoresFinal = Array.from(sala.jugadores).map((id) =>
-            jugadores.get(id)
-        );
-        io.to(sala.codigo).emit("finCicloMapas", { jugadores: jugadoresFinal });
-
-        estadisticasGlobales.totalPartidasJugadas++;
-        logEvento(
-            `Ciclo de mapas terminado en sala ${sala.codigo}. Partidas totales: ${estadisticasGlobales.totalPartidasJugadas}`,
-            "GAME_END"
-        );
-
-        // Limpiar sala
-        sala.jugadores.forEach((jugadorId) => {
-            const jugador = jugadores.get(jugadorId);
-            if (jugador) {
-                jugador.sala = null;
-            }
-        });
-
-        if (sala.intervalos) {
-            clearInterval(sala.intervalos.escudo);
-            clearInterval(sala.intervalos.cajas);
-            clearInterval(sala.intervalos.tiempo);
-        }
-        salas.delete(sala.codigo);
-
-        return;
-    }
-
-    // Crear nuevo mapa
-    sala.mapa = new Mapa(sala.mapaActual);
-    sala.tiempoRestante = CONFIG_JUEGO.TIEMPO_PARTIDA;
-    sala.enTransicion = false;
-
-    // Resetear estadísticas de jugadores pero mantener kills acumuladas
-    sala.jugadores.forEach((jugadorId) => {
-        const jugador = jugadores.get(jugadorId);
-        if (jugador) {
-            const posicion = generarPosicionSegura(sala.mapa);
-            jugador.x = posicion.x;
-            jugador.y = posicion.y;
-            
-            // Aplicar estadísticas del personaje
-            const personaje = SISTEMA_PERSONAJES[jugador.personaje];
-            jugador.vida = CONFIG_JUEGO.VIDA_MAXIMA * personaje.estadisticas.vidaMultiplicador;
-            jugador.escudo = CONFIG_JUEGO.ESCUDO_MAXIMO * personaje.estadisticas.escudoMultiplicador;
-            jugador.maxVida = CONFIG_JUEGO.VIDA_MAXIMA * personaje.estadisticas.vidaMultiplicador;
-            jugador.maxEscudo = CONFIG_JUEGO.ESCUDO_MAXIMO * personaje.estadisticas.escudoMultiplicador;
-            
-            jugador.municion = CONFIG_JUEGO.MUNICION_INICIAL * (personaje.estadisticas.capacidadMunicion || 1);
-            jugador.ultimoDano = Date.now();
-            jugador.regenerandoEscudo = false;
-            jugador.kills = 0;
-            jugador.muertes = 0;
-        }
-    });
-
-    generarCajasMunicion(sala);
-
-    // REINICIAR SISTEMA DE REGENERACIÓN DE ESCUDOS
-    if (sala.intervalos && sala.intervalos.escudo) {
-        clearInterval(sala.intervalos.escudo);
-    }
-
-    const intervaloEscudo = setInterval(() => {
-        if (salas.has(sala.codigo) && sala.enJuego && !sala.enTransicion) {
-            regenerarEscudos(sala);
-        } else {
-            clearInterval(intervaloEscudo);
-        }
-    }, 1000);
-
-    sala.intervalos.escudo = intervaloEscudo;
-
-    // Reiniciar temporizador para el nuevo mapa
-    iniciarTemporizador(sala);
-
-    // Notificar a los clientes del cambio de mapa
-    io.to(sala.codigo).emit("cambioMapa", {
-        mapa: sala.mapaActual,
-        tiempoRestante: sala.tiempoRestante,
-        jugadores: Array.from(sala.jugadores).map((id) => jugadores.get(id)),
-    });
-
-    io.to(sala.codigo).emit("actualizarCajasMunicion", sala.cajasMunicion);
-
-    logEvento(
-        `Sala ${sala.codigo} cambió al mapa ${sala.mapaActual}`,
-        "MAP_CHANGE"
-    );
-}
-
-// Función para iniciar temporizador de partida
-function iniciarTemporizador(sala) {
-    if (sala.intervalos && sala.intervalos.tiempo) {
-        clearInterval(sala.intervalos.tiempo);
-    }
-
-    sala.intervalos.tiempo = setInterval(() => {
-        if (!sala.enJuego || sala.enTransicion) return;
-
-        sala.tiempoRestante -= 1000;
-
-        // Enviar actualización del tiempo a los clientes
-        io.to(sala.codigo).emit("actualizarTiempo", {
-            tiempoRestante: sala.tiempoRestante,
-            minutos: Math.floor(sala.tiempoRestante / 60000),
-            segundos: Math.floor((sala.tiempoRestante % 60000) / 1000),
-        });
-
-        // Verificar si el tiempo se acabó
-        if (sala.tiempoRestante <= 0) {
-            clearInterval(sala.intervalos.tiempo);
-            finalizarPartida(sala);
-        }
-    }, 1000);
-}
-
-// Función para finalizar partida y determinar ganador
-function finalizarPartida(sala) {
-    sala.enTransicion = true;
-
-    const ganadores = determinarGanador(sala);
-
-    // Loggear estadísticas de la partida
-    let statsMensaje = `Partida terminada en sala ${sala.codigo}, mapa ${sala.mapaActual}. `;
-    if (ganadores.length === 1) {
-        statsMensaje += `Ganador: ${ganadores[0].nombre} con ${ganadores[0].kills} kills`;
-    } else if (ganadores.length > 1) {
-        statsMensaje += `Empate entre: ${ganadores
-            .map((g) => g.nombre)
-            .join(", ")} con ${ganadores[0].kills} kills cada uno`;
-    } else {
-        statsMensaje += `No hay ganadores`;
-    }
-
-    logEvento(statsMensaje, "GAME_END");
-
-    // Notificar fin de partida
-    io.to(sala.codigo).emit("finPartida", {
-        ganadores: ganadores,
-        mapa: sala.mapaActual,
-        esUltimoMapa: sala.mapaActual >= 3,
-    });
-
-    // Iniciar transición al siguiente mapa después de 5 segundos
-    setTimeout(() => {
-        cambiarMapa(sala);
-    }, CONFIG_JUEGO.TIEMPO_TRANSICION);
-}
+// Exponer funciones movidas desde el módulo de salas para mantener compatibilidad
+const {
+    generarCodigoSala,
+    generarPosicionSegura,
+    generarCajasMunicion,
+    regenerarEscudos,
+    limpiarSalasVacias,
+    determinarGanador,
+    cambiarMapa,
+    iniciarTemporizador,
+    finalizarPartida,
+    administrarTiempoSala,
+} = salasModule;
 
 // Configurar intervalos
 setInterval(limpiarSalasVacias, 30000);
@@ -456,63 +190,7 @@ function obtenerEstadisticasServidor() {
     };
 }
 
-// Función para administrar tiempo de sala
-function administrarTiempoSala(codigoSala, accion, datos = {}) {
-    const sala = salas.get(codigoSala);
-    if (!sala || !sala.enJuego) {
-        return { exito: false, mensaje: "Sala no encontrada o no en juego" };
-    }
-
-    switch (accion) {
-        case "acelerar":
-            const minutosAcelerar = datos.minutos || 1;
-            sala.tiempoRestante = Math.max(
-                0,
-                sala.tiempoRestante - minutosAcelerar * 60000
-            );
-            logEvento(
-                `Admin aceleró tiempo en sala ${codigoSala}: -${minutosAcelerar} min`,
-                "ADMIN"
-            );
-            return {
-                exito: true,
-                mensaje: `Tiempo acelerado ${minutosAcelerar} minuto(s)`,
-            };
-
-        case "pausar":
-            sala.tiempoPausado = !sala.tiempoPausado;
-            if (sala.intervalos && sala.intervalos.tiempo) {
-                if (sala.tiempoPausado) {
-                    clearInterval(sala.intervalos.tiempo);
-                } else {
-                    iniciarTemporizador(sala);
-                }
-            }
-            logEvento(
-                `Admin ${sala.tiempoPausado ? "pausó" : "reanudó"
-                } tiempo en sala ${codigoSala}`,
-                "ADMIN"
-            );
-            return {
-                exito: true,
-                mensaje: `Tiempo ${sala.tiempoPausado ? "pausado" : "reanudado"}`,
-            };
-
-        case "saltar_mapa":
-            finalizarPartida(sala);
-            logEvento(`Admin saltó mapa en sala ${codigoSala}`, "ADMIN");
-            return { exito: true, mensaje: "Saltando al siguiente mapa" };
-
-        case "terminar_partida":
-            sala.mapaActual = 3;
-            finalizarPartida(sala);
-            logEvento(`Admin terminó partida en sala ${codigoSala}`, "ADMIN");
-            return { exito: true, mensaje: "Partida terminada" };
-
-        default:
-            return { exito: false, mensaje: "Acción no válida" };
-    }
-}
+// La administración del tiempo se delega al módulo `server/salas`.
 
 // Función para guardar reportes en el servidor
 function saveCheatReport(reportData) {
