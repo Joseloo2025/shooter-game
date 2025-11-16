@@ -115,4 +115,191 @@ const SISTEMA_PERSONAJES = {
     }
 };
 
-module.exports = SISTEMA_PERSONAJES;
+function activarHabilidadJugador(jugadores, salas, io, logEvento, SISTEMA_PERSONAJES, jugadorId) {
+    const jugador = jugadores.get(jugadorId);
+    if (!jugador) return { exito: false, mensaje: "Jugador no encontrado" };
+
+    const ahora = Date.now();
+    const personaje = SISTEMA_PERSONAJES[jugador.personaje];
+    
+    // Verificar cooldown
+    if (jugador.habilidadCooldown && ahora - jugador.habilidadCooldown < personaje.habilidad.cooldown) {
+        const tiempoRestante = Math.ceil((personaje.habilidad.cooldown - (ahora - jugador.habilidadCooldown)) / 1000);
+        return { exito: false, mensaje: `Habilidad en cooldown: ${tiempoRestante}s` };
+    }
+
+    // Para el Ingeniero, la habilidad se maneja con "colocarTrampa"
+    if (jugador.personaje === 5) {
+        return { 
+            exito: true, 
+            mensaje: "Modo colocación activado - Haz clic para colocar la trampa" 
+        };
+    }
+
+    // OBTENER LA SALA DEL JUGADOR
+    const sala = salas.get(jugador.sala);
+    if (!sala) return { exito: false, mensaje: "Jugador no está en una sala" };
+
+    // Aplicar habilidad según personaje (para personajes que no sean Ingeniero)
+    let efectoAplicado = false;
+    
+    switch (jugador.personaje) {
+        case 1: // Soldado - Resistencia Mejorada
+            jugador.habilidadActiva = {
+                tipo: "resistencia",
+                inicio: ahora,
+                duracion: personaje.habilidad.duracion
+            };
+            efectoAplicado = true;
+            break;
+            
+        case 2: // Francotirador - Disparo Preciso
+            jugador.proximoDisparoCritico = true;
+            jugador.habilidadActiva = {
+                tipo: "disparoPreciso",
+                inicio: ahora
+            };
+            efectoAplicado = true;
+            break;
+            
+        case 3: // Asalto - Carga Rápida
+            jugador.habilidadActiva = {
+                tipo: "cargaRapida",
+                inicio: ahora,
+                duracion: personaje.habilidad.duracion
+            };
+            efectoAplicado = true;
+            break;
+            
+        case 4: // Médico - Campo de Curación
+            // Curar al médico
+            const curacionMedico = jugador.maxVida * 0.25;
+            jugador.vida = Math.min(jugador.vida + curacionMedico, jugador.maxVida);
+            
+            // Curar a jugadores cercanos
+            sala.jugadores.forEach((idAliado) => {
+                if (idAliado !== jugadorId) {
+                    const aliado = jugadores.get(idAliado);
+                    if (aliado) {
+                        const distancia = Math.sqrt(
+                            Math.pow(jugador.x - aliado.x, 2) + Math.pow(jugador.y - aliado.y, 2)
+                        );
+                        if (distancia <= personaje.estadisticas.radioCuracion) {
+                            const curacionAliado = aliado.maxVida * 0.25;
+                            aliado.vida = Math.min(aliado.vida + curacionAliado, aliado.maxVida);
+                        }
+                    }
+                }
+            });
+            efectoAplicado = true;
+            break;
+            
+        case 6: // Comandante - Ataque Coordinado
+            jugador.habilidadActiva = {
+                tipo: "ataqueCoordinado",
+                inicio: ahora,
+                duracion: personaje.habilidad.duracion
+            };
+            
+            // Aplicar buff a jugadores cercanos
+            sala.jugadores.forEach((idAliado) => {
+                const aliado = jugadores.get(idAliado);
+                if (aliado) {
+                    const distancia = Math.sqrt(
+                        Math.pow(jugador.x - aliado.x, 2) + Math.pow(jugador.y - aliado.y, 2)
+                    );
+                    if (distancia <= personaje.estadisticas.radioBuff) {
+                        aliado.buffAtaque = {
+                            multiplicador: personaje.estadisticas.buffEquipo,
+                            inicio: ahora,
+                            duracion: personaje.habilidad.duracion
+                        };
+                    }
+                }
+            });
+            efectoAplicado = true;
+            break;
+    }
+
+    if (efectoAplicado) {
+        jugador.habilidadCooldown = ahora;
+        return { exito: true, mensaje: `Habilidad ${personaje.habilidad.nombre} activada` };
+    } else {
+        return { exito: false, mensaje: "Error al activar habilidad" };
+    }
+}
+
+function procesarHabilidadesActivas(sala, jugadores, aplicarDano, SISTEMA_PERSONAJES, io) {
+    const ahora = Date.now();
+    let necesitaActualizacion = false;
+
+    // Procesar habilidades de jugadores
+    sala.jugadores.forEach((jugadorId) => {
+        const jugador = jugadores.get(jugadorId);
+        if (jugador && jugador.habilidadActiva) {
+            const personaje = SISTEMA_PERSONAJES[jugador.personaje];
+            
+            // Verificar si la habilidad ha expirado
+            if (jugador.habilidadActiva.duracion && ahora - jugador.habilidadActiva.inicio > jugador.habilidadActiva.duracion) {
+                jugador.habilidadActiva = null;
+                necesitaActualizacion = true;
+            }
+            
+            // Procesar efectos continuos
+            switch (jugador.personaje) {
+                case 4: // Médico - Curación pasiva
+                    if (personaje.estadisticas.curacionPasiva) {
+                        jugador.vida = Math.min(jugador.vida + personaje.estadisticas.curacionPasiva, jugador.maxVida);
+                        necesitaActualizacion = true;
+                    }
+                    break;
+            }
+        }
+        
+        // Procesar buffs de ataque
+        if (jugador && jugador.buffAtaque && ahora - jugador.buffAtaque.inicio > jugador.buffAtaque.duracion) {
+            jugador.buffAtaque = null;
+            necesitaActualizacion = true;
+        }
+    });
+
+    // Procesar torretas
+    if (sala.torretas) {
+        for (let i = sala.torretas.length - 1; i >= 0; i--) {
+            const torreta = sala.torretas[i];
+            
+            // Verificar si la torreta ha expirado
+            if (ahora - torreta.inicio > torreta.duracion) {
+                sala.torretas.splice(i, 1);
+                necesitaActualizacion = true;
+                continue;
+            }
+            
+            // Buscar enemigos cercanos para disparar
+            let objetivoEncontrado = false;
+            sala.jugadores.forEach((jugadorId) => {
+                if (!objetivoEncontrado && jugadorId !== torreta.jugadorId) {
+                    const enemigo = jugadores.get(jugadorId);
+                    if (enemigo) {
+                        const distancia = Math.sqrt(
+                            Math.pow(torreta.x - enemigo.x, 2) + Math.pow(torreta.y - enemigo.y, 2)
+                        );
+                        if (distancia <= torreta.radio) {
+                            // Disparar a enemigo
+                            aplicarDano(enemigo.id, torreta.daño, torreta.jugadorId);
+                            objetivoEncontrado = true;
+                        }
+                    }
+                }
+            });
+        }
+    }
+
+    return necesitaActualizacion;
+}
+
+module.exports = {
+    SISTEMA_PERSONAJES,
+    activarHabilidadJugador,
+    procesarHabilidadesActivas,
+};
