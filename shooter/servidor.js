@@ -7,7 +7,7 @@ const fs = require("fs");
 // Usar la definición de Mapa centralizada en `mapa.js`
 const Mapa = require('./mapa');
 // Sistema de armas extraído a server/armas.js
-const { SISTEMA_ARMAS, obtenerArmaPorId, obtenerSlotPorTipo } = require('./server/armas');
+const { SISTEMA_ARMAS, obtenerArmaPorId, obtenerSlotPorTipo, comprarArmaJugador, cambiarArmaJugador } = require('./server/armas');
 
 const app = express();
 const server = http.createServer(app);
@@ -1289,7 +1289,7 @@ io.on("connection", (socket) => {
 
     // EVENTOS DEL SISTEMA DE ARMAS Y TIENDA
     socket.on("comprarArma", (data) => {
-        const resultado = comprarArmaJugador(socket.id, data.armaId);
+        const resultado = comprarArmaJugador(jugadores, socket.id, data.armaId);
         socket.emit("armaComprada", resultado);
 
         if (resultado.exito) {
@@ -1311,7 +1311,7 @@ io.on("connection", (socket) => {
     });
 
     socket.on("cambiarArma", (slot) => {
-        if (cambiarArmaJugador(socket.id, slot)) {
+        if (cambiarArmaJugador(jugadores, socket.id, slot)) {
             socket.emit("armaCambiada", { slot: slot });
 
             const jugador = jugadores.get(socket.id);
