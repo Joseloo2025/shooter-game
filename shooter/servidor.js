@@ -564,59 +564,8 @@ function saveCheatReport(reportData) {
     }
 }
 
-// FUNCIONES DEL SISTEMA DE ARMAS
-// Funciones de armas provistas por `server/armas.js` (importadas arriba)
-
-function comprarArmaJugador(jugadorId, armaId) {
-    const jugador = jugadores.get(jugadorId);
-    if (!jugador) return { exito: false, mensaje: "Jugador no encontrado" };
-
-    const arma = obtenerArmaPorId(armaId);
-    if (!arma) return { exito: false, mensaje: "Arma no válida" };
-
-    if (jugador.oro >= arma.precio) {
-        const slot = obtenerSlotPorTipo(arma.tipo);
-
-        // Verificar si ya tiene un arma de este tipo
-        if (jugador.armas[slot]) {
-            // Ya tiene un arma de este tipo, reemplazar
-            jugador.oro -= arma.precio;
-            jugador.armas[slot] = armaId;
-            jugador.estadisticasPersonaje.oroGastado += arma.precio;
-
-            return {
-                exito: true,
-                mensaje: `Arma ${arma.nombre} comprada y equipada`,
-                arma: arma,
-                oroRestante: jugador.oro
-            };
-        } else {
-            jugador.oro -= arma.precio;
-            jugador.armas[slot] = armaId;
-            jugador.estadisticasPersonaje.oroGastado += arma.precio;
-
-            return {
-                exito: true,
-                mensaje: `Arma ${arma.nombre} comprada y equipada`,
-                arma: arma,
-                oroRestante: jugador.oro
-            };
-        }
-    } else {
-        return { exito: false, mensaje: "Oro insuficiente" };
-    }
-}
-
-function cambiarArmaJugador(jugadorId, slot) {
-    const jugador = jugadores.get(jugadorId);
-    if (!jugador) return false;
-
-    if (jugador.armas[slot]) {
-        jugador.armaActual = slot;
-        return true;
-    }
-    return false;
-}
+// Las funciones del sistema de armas (`comprarArmaJugador`, `cambiarArmaJugador`,
+// etc.) se importan desde `server/armas.js` (ver la destructuración al inicio del archivo).
 
 // Las implementaciones de habilidades se han movido a `server/personajes.js` y
 // se importan arriba como `activarHabilidadJugador` y `procesarHabilidadesActivas`.
