@@ -20,7 +20,7 @@ class Juego {
         this.frameCount = 0;
 		
 		this.modoColocacionTrampa = false;
-
+        // Hola
         // Sistema de temporizador
         this.tiempoRestante = 300000;
         this.temporizadorActivo = false;
